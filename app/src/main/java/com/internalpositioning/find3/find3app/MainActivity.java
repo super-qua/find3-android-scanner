@@ -1,42 +1,24 @@
 package com.internalpositioning.find3.find3app;
 
 import android.Manifest;
-import android.app.AlarmManager;
-import android.app.Notification;
-import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.location.Location;
-import android.location.LocationManager;
-import android.net.wifi.ScanResult;
-import android.net.wifi.WifiManager;
-import android.os.Build;
-import android.os.SystemClock;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
-import android.support.v4.app.NotificationCompat;
-import android.text.TextUtils;
 import android.text.util.Linkify;
 import android.util.Log;
-import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.AutoCompleteTextView;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
-import android.widget.SimpleAdapter;
 import android.widget.TextView;
-import android.widget.Toast;
 import android.widget.ToggleButton;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -57,26 +39,19 @@ public class MainActivity extends AppCompatActivity {
 
     // background manager
     private PendingIntent recurringLl24 = null;
-    private Intent ll24 = null;
-    AlarmManager alarms = null;
     WebSocketClient mWebSocketClient = null;
-    Timer timer = null;
     private RemindTask oneSecondTimer = null;
+    Timer timer = null;
 
     private String[] autocompleteLocations = new String[] {"bedroom","living room","kitchen","bathroom", "office"};
 
     @Override
     protected void onDestroy() {
         Log.d(TAG, "MainActivity onDestroy()");
-        if (alarms != null) alarms.cancel(recurringLl24);
         if (timer != null) timer.cancel();
         if (mWebSocketClient != null) {
             mWebSocketClient.close();
         }
-        android.app.NotificationManager mNotificationManager = (android.app.NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        mNotificationManager.cancel(0);
-        Intent scanService = new Intent(this, ScanService.class);
-        stopService(scanService);
         super.onDestroy();
     }
 
@@ -113,7 +88,6 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
         // check permissions
         int permissionCheck = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION);
         if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
@@ -123,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
         TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
         rssi_msg.setText("not running");
 
+        if (timer != null) timer.cancel();
 
         // check to see if there are preferences
         SharedPreferences sharedPref = MainActivity.this.getPreferences(Context.MODE_PRIVATE);
@@ -143,16 +118,13 @@ public class MainActivity extends AppCompatActivity {
 
 
         ToggleButton toggleButtonTracking = (ToggleButton) findViewById(R.id.toggleScanType);
+
         toggleButtonTracking.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                 TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
                 rssi_msg.setText("not running");
                 Log.d(TAG, "toggle set to false");
-                if (alarms != null) alarms.cancel(recurringLl24);
-                android.app.NotificationManager mNotificationManager = (android.app.NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                mNotificationManager.cancel(0);
-                if (timer != null) timer.cancel();
 
                 CompoundButton scanButton = (CompoundButton) findViewById(R.id.toggleButton);
                 scanButton.setChecked(false);
@@ -160,114 +132,119 @@ public class MainActivity extends AppCompatActivity {
         });
 
         ToggleButton toggleButton = (ToggleButton) findViewById(R.id.toggleButton);
+        toggleButton.setChecked(ScanService.IS_SERVICE_RUNNING);
+        scanIsRunning(ScanService.IS_SERVICE_RUNNING);
+
         toggleButton.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                if (isChecked) {
-                    TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
-                    String familyName = ((EditText) findViewById(R.id.familyName)).getText().toString().toLowerCase();
-                    if (familyName.equals("")) {
-                        rssi_msg.setText("family name cannot be empty");
-                        buttonView.toggle();
-                        return;
-                    }
+                                                    @Override
+                                                    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                                                        if (isChecked) {
+                                                            TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
+                                                            String familyName = ((EditText) findViewById(R.id.familyName)).getText().toString().toLowerCase();
+                                                            if (familyName.equals("")) {
+                                                                rssi_msg.setText("family name cannot be empty");
+                                                                buttonView.toggle();
+                                                                return;
+                                                            }
 
-                    String serverAddress = ((EditText) findViewById(R.id.serverAddress)).getText().toString().toLowerCase();
-                    if (serverAddress.equals("")) {
-                        rssi_msg.setText("server address cannot be empty");
-                        buttonView.toggle();
-                        return;
-                    }
-                    if (serverAddress.contains("http")!=true) {
-                        rssi_msg.setText("must include http or https in server name");
-                        buttonView.toggle();
-                        return;
-                    }
-                    String deviceName = ((EditText) findViewById(R.id.deviceName)).getText().toString().toLowerCase();
-                    if (deviceName.equals("")) {
-                        rssi_msg.setText("device name cannot be empty");
-                        buttonView.toggle();
-                        return;
-                    }
-                    boolean allowGPS = ((CheckBox) findViewById(R.id.allowGPS)).isChecked();
-                    Log.d(TAG,"allowGPS is checked: "+allowGPS);
-                    String locationName = ((EditText) findViewById(R.id.locationName)).getText().toString().toLowerCase();
+                                                            String serverAddress = ((EditText) findViewById(R.id.serverAddress)).getText().toString().toLowerCase();
+                                                            if (serverAddress.equals("")) {
+                                                                rssi_msg.setText("server address cannot be empty");
+                                                                buttonView.toggle();
+                                                                return;
+                                                            }
+                                                            if (serverAddress.contains("http") != true) {
+                                                                rssi_msg.setText("must include http or https in server name");
+                                                                buttonView.toggle();
+                                                                return;
+                                                            }
+                                                            String deviceName = ((EditText) findViewById(R.id.deviceName)).getText().toString().toLowerCase();
+                                                            if (deviceName.equals("")) {
+                                                                rssi_msg.setText("device name cannot be empty");
+                                                                buttonView.toggle();
+                                                                return;
+                                                            }
+                                                            boolean allowGPS = ((CheckBox) findViewById(R.id.allowGPS)).isChecked();
+                                                            Log.d(TAG, "allowGPS is checked: " + allowGPS);
+                                                            String locationName = ((EditText) findViewById(R.id.locationName)).getText().toString().toLowerCase();
 
-                    CompoundButton trackingButton = (CompoundButton) findViewById(R.id.toggleScanType);
-                    if (trackingButton.isChecked() == false) {
-                        locationName = "";
-                    } else {
-                        if (locationName.equals("")) {
-                            rssi_msg.setText("location name cannot be empty when learning");
-                            buttonView.toggle();
-                            return;
-                        }
-                    }
+                                                            CompoundButton trackingButton = (CompoundButton) findViewById(R.id.toggleScanType);
+                                                            if (trackingButton.isChecked() == false) {
+                                                                locationName = "";
+                                                            } else {
+                                                                if (locationName.equals("")) {
+                                                                    rssi_msg.setText("location name cannot be empty when learning");
+                                                                    buttonView.toggle();
+                                                                    return;
+                                                                }
+                                                            }
 
-                    SharedPreferences sharedPref = MainActivity.this.getPreferences(Context.MODE_PRIVATE);
-                    SharedPreferences.Editor editor = sharedPref.edit();
-                    editor.putString("familyName", familyName);
-                    editor.putString("deviceName", deviceName);
-                    editor.putString("serverAddress", serverAddress);
-                    editor.putString("locationName", locationName);
-                    editor.putBoolean("allowGPS",allowGPS);
-                    editor.commit();
+                                                            scanIsRunning(true);
 
-                    rssi_msg.setText("running");
-                    // 24/7 alarm
-                    ll24 = new Intent(MainActivity.this, AlarmReceiverLife.class);
-                    Log.d(TAG, "setting familyName to [" + familyName + "]");
-                    ll24.putExtra("familyName", familyName);
-                    ll24.putExtra("deviceName", deviceName);
-                    ll24.putExtra("serverAddress", serverAddress);
-                    ll24.putExtra("locationName", locationName);
-                    ll24.putExtra("allowGPS",allowGPS);
-                    recurringLl24 = PendingIntent.getBroadcast(MainActivity.this, 0, ll24, PendingIntent.FLAG_CANCEL_CURRENT);
-                    alarms = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
-                    alarms.setRepeating(AlarmManager.RTC_WAKEUP, SystemClock.currentThreadTimeMillis(), 60000, recurringLl24);
-                    timer = new Timer();
-                    oneSecondTimer = new RemindTask();
-                    timer.scheduleAtFixedRate(oneSecondTimer, 1000, 1000);
-                    connectWebSocket();
-
-                    String scanningMessage = "Scanning for " + familyName + "/" + deviceName;
-                    if (locationName.equals("") == false) {
-                        scanningMessage += " at " + locationName;
-                    }
-                    NotificationCompat.Builder notificationBuilder = new NotificationCompat.Builder(MainActivity.this)
-                            .setSmallIcon(R.drawable.ic_stat_name)
-                            .setContentTitle(scanningMessage)
-                            .setContentIntent(recurringLl24);
-                    //specifying an action and its category to be triggered once clicked on the notification
-                    Intent resultIntent = new Intent(MainActivity.this, MainActivity.class);
-                    resultIntent.setAction("android.intent.action.MAIN");
-                    resultIntent.addCategory("android.intent.category.LAUNCHER");
-                    PendingIntent resultPendingIntent = PendingIntent.getActivity(MainActivity.this, 0, resultIntent, PendingIntent.FLAG_UPDATE_CURRENT);
-                    notificationBuilder.setContentIntent(resultPendingIntent);
-
-                    android.app.NotificationManager notificationManager =
-                            (android.app.NotificationManager) MainActivity.this.getSystemService(Context.NOTIFICATION_SERVICE);
-                    notificationManager.notify(0 /* ID of notification */, notificationBuilder.build());
+                                                            Intent startScanService = new Intent(MainActivity.this, ScanService.class);
+                                                            startScanService.setAction("start");
+                                                            startScanService.putExtra("familyName", familyName);
+                                                            startScanService.putExtra("deviceName", deviceName);
+                                                            startScanService.putExtra("locationName", locationName);
+                                                            startScanService.putExtra("serverAddress", serverAddress);
+                                                            startScanService.putExtra("allowGPS", allowGPS);
+                                                            try {
+                                                                startForegroundService(startScanService);
+                                                            } catch (Exception e) {
+                                                                Log.w(TAG, e.toString());
+                                                            }
 
 
-                    final TextView myClickableUrl = (TextView) findViewById(R.id.textInstructions);
-                    myClickableUrl.setText("See your results in realtime: " + serverAddress + "/view/location/" + familyName + "/" + deviceName);
-                    Linkify.addLinks(myClickableUrl, Linkify.WEB_URLS);
-                } else {
-                    TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
-                    rssi_msg.setText("not running");
-                    Log.d(TAG, "toggle set to false");
-                    alarms.cancel(recurringLl24);
-                    android.app.NotificationManager mNotificationManager = (android.app.NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                    mNotificationManager.cancel(0);
-                    timer.cancel();
-                }
-            }
-        });
+                                                        } else {
+                                                            Log.d(TAG, "toggle set to false");
+                                                            scanIsRunning(false);
+                                                            Intent stopIntent = new Intent(MainActivity.this, ScanService.class);
+                                                            stopIntent.setAction("stop");
+                                                            startService(stopIntent);
+                                                            timer.cancel();
+                                                        }
+                                                    }
+                                                }
+        );
 
 
     }
 
+    private void scanIsRunning(boolean isRunning){
+        TextView rssi_msg = (TextView) findViewById(R.id.textOutput);
+        if(isRunning) {
+
+            String familyName = ((EditText) findViewById(R.id.familyName)).getText().toString().toLowerCase();
+
+            String serverAddress = ((EditText) findViewById(R.id.serverAddress)).getText().toString().toLowerCase();
+            String deviceName = ((EditText) findViewById(R.id.deviceName)).getText().toString().toLowerCase();
+            String locationName = ((EditText) findViewById(R.id.locationName)).getText().toString().toLowerCase();
+            boolean allowGPS = ((CheckBox) findViewById(R.id.allowGPS)).isChecked();
+
+            SharedPreferences sharedPref = MainActivity.this.getPreferences(Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = sharedPref.edit();
+            editor.putString("familyName", familyName);
+            editor.putString("deviceName", deviceName);
+            editor.putString("serverAddress", serverAddress);
+            editor.putString("locationName", locationName);
+            editor.putBoolean("allowGPS", allowGPS);
+            editor.commit();
+
+
+            rssi_msg.setText("running");
+            timer = new Timer();
+            oneSecondTimer = new RemindTask();
+            timer.scheduleAtFixedRate(oneSecondTimer, 1000, 1000);
+
+            final TextView myClickableUrl = (TextView) findViewById(R.id.textInstructions);
+            myClickableUrl.setText("See your results in realtime: " + serverAddress + "/view/location/" + familyName + "/" + deviceName);
+            Linkify.addLinks(myClickableUrl, Linkify.WEB_URLS);
+
+            connectWebSocket();
+        } else {
+            rssi_msg.setText("not running");
+        }
+    }
 
     private void connectWebSocket() {
         URI uri;
