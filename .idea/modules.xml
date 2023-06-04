@@ -3,6 +3,8 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/app/app.iml" filepath="$PROJECT_DIR$/app/app.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/find3-android-scanner.iml" filepath="$PROJECT_DIR$/.idea/modules/find3-android-scanner.iml" group="find3-android-scanner" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/app/find3-android-scanner-app.iml" filepath="$PROJECT_DIR$/.idea/modules/app/find3-android-scanner-app.iml" group="find3-android-scanner/app" />
       <module fileurl="file://$PROJECT_DIR$/find5.iml" filepath="$PROJECT_DIR$/find5.iml" />
     </modules>
   </component>
