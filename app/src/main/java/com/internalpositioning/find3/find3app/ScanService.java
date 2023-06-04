@@ -1,7 +1,8 @@
 package com.internalpositioning.find3.find3app;
 
-import android.app.Activity;
 import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
@@ -10,14 +11,13 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ServiceInfo;
 import android.location.Location;
 import android.location.LocationManager;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.os.IBinder;
 import android.util.Log;
-import android.widget.EditText;
-import android.widget.TextView;
 
 import com.android.volley.AuthFailureError;
 import com.android.volley.NetworkResponse;
@@ -41,18 +41,20 @@ import java.util.List;
  */
 
 public class ScanService extends Service {
+
+    public static boolean IS_SERVICE_RUNNING = false;
     // logging
     private final String TAG = "ScanService";
+    private final int NOTIFICATION_ID = 1001;
+    private final String NOTIFICATION_CHANNELID = "find3";
 
-    int mStartMode;       // indicates how to behave if the service is killed
-    IBinder mBinder;      // interface for clients that bind
     boolean mAllowRebind; // indicates whether onRebind should be used
 
     boolean isScanning = false;
     private final Object lock = new Object();
 
     // wifi scanning
-    private WifiManager wifi;
+    private WifiManager wifiManager;
 
     // bluetooth scanning
     private BluetoothAdapter BTAdapter = BluetoothAdapter.getDefaultAdapter();
@@ -69,6 +71,13 @@ public class ScanService extends Service {
     private String deviceName = "";
     private String serverAddress = "";
     private boolean allowGPS = false;
+    private Thread mThread;
+    private boolean mServiceStopped = false;
+    private long mLastSuccessfulScan = 0l;
+    private long mWifiTimeout = 24000l;
+    private int mScansLastMinute = 0;
+    private long mLastSuccessfulUpload = 0l;
+    private int mUploadsLastMinute = 0;
 
     @Override
     public void onCreate() {
@@ -76,14 +85,12 @@ public class ScanService extends Service {
         Log.d(TAG, "creating new scan service");
         queue = Volley.newRequestQueue(this);
         // setup wifi
-        wifi = (WifiManager) this.getSystemService(Context.WIFI_SERVICE);
-        if (wifi.isWifiEnabled() == false) {
-            wifi.setWifiEnabled(true);
+        wifiManager = (WifiManager) this.getSystemService(Context.WIFI_SERVICE);
+        if (wifiManager.isWifiEnabled() == false) {
+            wifiManager.setWifiEnabled(true);
         }
-        // register wifi intent filter
-        IntentFilter intentFilter = new IntentFilter();
-        intentFilter.addAction(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION);
-        registerReceiver(mWifiScanReceiver, intentFilter);
+        registerReceiver(mWifiScanReceiver, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+
 
         try {
             // setup bluetooth
@@ -100,7 +107,7 @@ public class ScanService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        super.onStartCommand(intent, flags, startId);
+
         deviceName = intent.getStringExtra("deviceName");
         familyName = intent.getStringExtra("familyName");
         locationName = intent.getStringExtra("locationName");
@@ -109,77 +116,91 @@ public class ScanService extends Service {
 
         Log.d(TAG, "familyName: " + familyName);
 
-        new java.util.Timer().schedule(
-                new java.util.TimerTask() {
-                    @Override
-                    public void run() {
-                        synchronized (lock) {
-                            if (isScanning == false) {
-                                doScan();
+        if (intent.getAction().equals("start")) {
+            IS_SERVICE_RUNNING = true;
+            mServiceStopped = false;
+            Log.i(TAG, "Received Start Foreground Intent ");
+            mThread = new Thread(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            int i=0;
+                            while (!mServiceStopped) {
+                                Log.d("Service", "Service is running...");
+                                try {
+                                    if ((System.currentTimeMillis() - mLastSuccessfulScan) > mWifiTimeout){
+                                        synchronized (lock) {
+                                            if (isScanning == false) {
+                                                doScan();
+                                            }
+                                        }
+                                    }
+                                    if(i == 60){
+                                        mScansLastMinute = 0;
+                                        mUploadsLastMinute = 0;
+                                        i=0;
+                                    }
+                                    if(mLastSuccessfulScan != 0l) {
+                                        String notificationText = "%d scans in the last minute (%dmin %ds ago)\n%d uploads in the last minute (%dmin %ds ago)";
+
+                                        long minutesSinceLastSuccessfulScan = (System.currentTimeMillis() - mLastSuccessfulScan)/(1000*60);
+                                        long secondsSinceLastSuccessfulScan = (System.currentTimeMillis() - mLastSuccessfulScan)/1000;
+                                        long minutesSinceLastSuccessfulUpload = (System.currentTimeMillis() - mLastSuccessfulUpload)/(1000*60);
+                                        long secondsSinceLastSuccessfulUpload = (System.currentTimeMillis() - mLastSuccessfulUpload)/1000;
+                                        notificationText = String.format(notificationText, mScansLastMinute, minutesSinceLastSuccessfulScan, secondsSinceLastSuccessfulScan-(minutesSinceLastSuccessfulScan*60), mUploadsLastMinute, minutesSinceLastSuccessfulUpload, secondsSinceLastSuccessfulUpload-(minutesSinceLastSuccessfulUpload*60));
+                                        updateNotification(notificationText, "Scanner is running");
+                                    }
+                                    i++;
+                                    Thread.sleep(1000);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
                             }
                         }
                     }
-                },
-                0
-        );
+            );
+            mThread.start();
 
 
-        new java.util.Timer().schedule(
-                new java.util.TimerTask() {
-                    @Override
-                    public void run() {
-                        synchronized (lock) {
-                            if (isScanning == false) {
-                                doScan();
-                            }
-                        }
-                    }
-                },
-                10000
-        );
+            NotificationChannel channel = new NotificationChannel(
+                    NOTIFICATION_CHANNELID,
+                    NOTIFICATION_CHANNELID,
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            getSystemService(NotificationManager.class).createNotificationChannel(channel);
 
-        new java.util.Timer().schedule(
-                new java.util.TimerTask() {
-                    @Override
-                    public void run() {
-                        synchronized (lock) {
-                            if (isScanning == false) {
-                                doScan();
-                            }
-                        }
-                    }
-                },
-                20000
-        );
-        new java.util.Timer().schedule(
-                new java.util.TimerTask() {
-                    @Override
-                    public void run() {
-                        synchronized (lock) {
-                            if (isScanning == false) {
-                                doScan();
-                            }
-                        }
-                    }
-                },
-                30000
-        );
-        new java.util.Timer().schedule(
-                new java.util.TimerTask() {
-                    @Override
-                    public void run() {
-                        synchronized (lock) {
-                            if (isScanning == false) {
-                                doScan();
-                            }
-                        }
-                        stopSelf(); // stop the service
-                    }
-                },
-                40000
-        );
+            startForeground(NOTIFICATION_ID, buildNotification("Positioning Service is running", "find3"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else if (intent.getAction().equals( "stop")) {
+            mServiceStopped = true;
+            Log.i(TAG, "Received Stop Foreground Intent");
+            //your end servce code
+            stopForeground(true);
+            IS_SERVICE_RUNNING = false;
+            stopSelfResult(startId);
+        }
 
-        return START_STICKY;
+
+        return super.onStartCommand(intent, flags, startId);
+    }
+
+    private Notification buildNotification(String text, String title){
+        // The PendingIntent to launch our activity if the user selects
+        // this notification
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent =
+                PendingIntent.getActivity(this, 0, notificationIntent,
+                        PendingIntent.FLAG_IMMUTABLE);
+
+        Notification.Builder notification = new Notification.Builder(this, NOTIFICATION_CHANNELID)
+                .setContentText(text)
+                .setContentTitle(title)
+                .setContentIntent(pendingIntent)
+                .setSmallIcon(R.drawable.ic_find3_01);
+        return notification.build();
+    }
+    private void updateNotification(String text, String title){
+        NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.notify(NOTIFICATION_ID, buildNotification(text, title));
     }
 
     @Override
@@ -204,6 +225,8 @@ public class ScanService extends Service {
     public void onDestroy() {
         // The service is no longer used and is being destroyed
         Log.v(TAG, "onDestroy");
+        mServiceStopped = true;
+        mThread.interrupt();
         try {
             if (receiver != null)
                 unregisterReceiver(receiver);
@@ -217,6 +240,7 @@ public class ScanService extends Service {
             Log.w(TAG, e.toString());
         }
         stopSelf();
+        IS_SERVICE_RUNNING = false;
         super.onDestroy();
 
     }
@@ -227,7 +251,8 @@ public class ScanService extends Service {
             // This condition is not necessary if you listen to only one action
             if (intent.getAction().equals(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)) {
                 Log.d(TAG, "timer off, trying to send data");
-                List<ScanResult> wifiScanList = wifi.getScanResults();
+                List<ScanResult> wifiScanList = wifiManager.getScanResults();
+                mLastSuccessfulScan = System.currentTimeMillis();
                 for (int i = 0; i < wifiScanList.size(); i++) {
                     String name = wifiScanList.get(i).BSSID.toLowerCase();
                     int rssi = wifiScanList.get(i).level;
@@ -243,12 +268,15 @@ public class ScanService extends Service {
                 BTAdapter = BluetoothAdapter.getDefaultAdapter();
                 synchronized (lock) {
                     isScanning = false;
+                    mScansLastMinute++;
                 }
             }
         }
     };
 
+
     private void doScan() {
+        Log.d(TAG, "doScan");
         synchronized (lock) {
             if (isScanning == true) {
                 return;
@@ -258,12 +286,17 @@ public class ScanService extends Service {
         bluetoothResults = new JSONObject();
         wifiResults = new JSONObject();
         BTAdapter.startDiscovery();
-        if (wifi.startScan()) {
-            Log.d(TAG, "started wifi scan");
+        // register wifi intent filter
+        if (wifiManager.startScan())
+        {
+            Log.d(TAG, "Wifi Scan");
         } else {
-            Log.w(TAG, "started wifi scan false?");
+            synchronized (lock) {
+                isScanning = false;
+            }
+            Log.w(TAG, "Wifi scan throttled");
         }
-        Log.d(TAG, "started discovery");
+
     }
 
     // bluetooth reciever
@@ -281,6 +314,7 @@ public class ScanService extends Service {
                 } catch (Exception e) {
                     Log.e(TAG, e.toString());
                 }
+                //sendData();
             }
         }
     }
@@ -312,11 +346,13 @@ public class ScanService extends Service {
 
             final String mRequestBody = jsonBody.toString();
             Log.d(TAG, mRequestBody);
-
             StringRequest stringRequest = new StringRequest(Request.Method.POST, URL, new Response.Listener<String>() {
                 @Override
                 public void onResponse(String response) {
                     Log.d(TAG, response);
+                    mLastSuccessfulUpload = System.currentTimeMillis();
+                    mUploadsLastMinute++;
+
                 }
             }, new Response.ErrorListener() {
                 @Override
